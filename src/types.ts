@@ -39,6 +39,7 @@ export interface LinkedAccounts {
 }
 
 export type AppView = 
+  | 'chat'
   | 'dashboard' 
   | 'setup' 
   | 'debate' 
@@ -46,6 +47,30 @@ export type AppView =
   | 'history' 
   | 'profile' 
   | 'auth';
+
+export type DebatePersona = 'adversary' | 'coach' | 'socratic' | 'referee';
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  persona?: DebatePersona;
+  topic?: string;
+  analysis?: ArgumentAnalysis;
+  fallacies?: FallacyDetection[];
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  topic: string;
+  userPosition: Position;
+  persona: DebatePersona;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 export type AuthMode = 'login' | 'signup' | 'forgot-password';
 

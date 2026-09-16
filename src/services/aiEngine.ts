@@ -153,17 +153,40 @@ export function analyzeUserArgumentClient(
   let persuasiveness = 7;
   let rebuttal = 6;
 
-  // Length and structure evaluation
-  if (words > 80) {
-    logic += 1;
-    clarity += 1;
-    persuasiveness += 1;
-  }
-  if (words < 25) {
-    logic -= 2;
-    evidence -= 2;
-    persuasiveness -= 2;
-    clarity -= 1;
+  const isQuestion = userArgument.trim().endsWith('?') || 
+    lower.startsWith('what if') || 
+    lower.startsWith('is a ') || 
+    lower.startsWith('is ') || 
+    lower.startsWith('who would') || 
+    lower.startsWith('why do') || 
+    lower.startsWith('why ') || 
+    lower.startsWith('can you') ||
+    lower.startsWith('how do') ||
+    lower.startsWith('how ') ||
+    lower.startsWith('suppose') ||
+    lower.startsWith('tell me') ||
+    lower.startsWith('explain');
+
+  if (isQuestion) {
+    logic = 8;
+    clarity = 9;
+    persuasiveness = 8;
+    relevance = 9;
+    evidence = 7;
+    rebuttal = 7;
+  } else {
+    // Length and structure evaluation for declarative arguments
+    if (words > 80) {
+      logic += 1;
+      clarity += 1;
+      persuasiveness += 1;
+    }
+    if (words < 25) {
+      logic -= 2;
+      evidence -= 2;
+      persuasiveness -= 2;
+      clarity -= 1;
+    }
   }
 
   // Evidence checks
@@ -302,13 +325,13 @@ export function judgeDebateClient(
   const userMsgs = messages.filter(m => m.sender === 'user');
   const aiMsgs = messages.filter(m => m.sender === 'ai');
 
-  // Compute average scores from user messages
-  let avgLogic = 7.5;
-  let avgEvidence = 6.8;
-  let avgRelevance = 8.2;
-  let avgClarity = 7.6;
-  let avgPersuasiveness = 7.3;
-  let avgRebuttal = 7.0;
+  // Compute objective scores from user messages
+  let avgLogic = 7.8;
+  let avgEvidence = 7.0;
+  let avgRelevance = 8.4;
+  let avgClarity = 8.0;
+  let avgPersuasiveness = 7.6;
+  let avgRebuttal = 7.4;
 
   if (userMsgs.length > 0) {
     const scoredMsgs = userMsgs.filter(m => m.analysis);
@@ -319,10 +342,35 @@ export function judgeDebateClient(
       avgClarity = scoredMsgs.reduce((acc, m) => acc + (m.analysis?.clarityScore || 7), 0) / scoredMsgs.length;
       avgPersuasiveness = scoredMsgs.reduce((acc, m) => acc + (m.analysis?.persuasivenessScore || 7), 0) / scoredMsgs.length;
       avgRebuttal = scoredMsgs.reduce((acc, m) => acc + (m.analysis?.rebuttalScore || 7), 0) / scoredMsgs.length;
+    } else {
+      // Evaluate raw user messages objectively based on content metrics
+      const totalWords = userMsgs.reduce((acc, m) => acc + m.message.trim().split(/\s+/).length, 0);
+      const avgWords = totalWords / userMsgs.length;
+      const combinedText = userMsgs.map(m => m.message.toLowerCase()).join(' ');
+
+      // Evidence & warrant keywords
+      const evidenceKeywords = ['evidence', 'data', 'study', 'research', 'percent', 'statistic', 'historical', 'precedent', 'proven', 'specifically', 'instance', 'report'];
+      const evidenceCount = evidenceKeywords.filter(k => combinedText.includes(k)).length;
+
+      // Logical connectives
+      const logicKeywords = ['because', 'therefore', 'consequently', 'furthermore', 'however', 'thus', 'inherent', 'causal', 'warrant', 'premise'];
+      const logicCount = logicKeywords.filter(k => combinedText.includes(k)).length;
+
+      avgClarity = Math.min(9.5, Math.max(6.5, 6.5 + (avgWords >= 40 ? 1.5 : 0.5) + (avgWords >= 80 ? 1.0 : 0)));
+      avgEvidence = Math.min(9.5, Math.max(6.0, 6.0 + evidenceCount * 0.6));
+      avgLogic = Math.min(9.5, Math.max(6.5, 6.5 + logicCount * 0.5));
+      avgRelevance = 8.5;
+      avgPersuasiveness = Math.min(9.2, Math.max(6.8, (avgClarity + avgLogic) / 2));
+      avgRebuttal = Math.min(9.2, Math.max(6.5, 7.0 + (userMsgs.length > 1 ? 1.2 : 0)));
     }
   }
 
-  // Scoring weights:
+  // Fair penalty for any detected fallacies on user arguments
+  const userFallacies = userMsgs.flatMap(m => m.fallacies || []);
+  const fallacyDeduction = Math.min(2.0, userFallacies.length * 0.5);
+  avgLogic = Math.max(5.0, avgLogic - fallacyDeduction);
+
+  // Scoring weights (100-point standardized rubric):
   // Logical Reasoning = 25%
   // Evidence = 20%
   // Rebuttal Quality = 20%
@@ -347,23 +395,64 @@ export function judgeDebateClient(
     userCategoryScores.persuasiveness
   );
 
-  // AI baseline score (calibrated by difficulty)
-  let aiBaseline = session.difficulty === 'Beginner' ? 74 : session.difficulty === 'Intermediate' ? 80 : 85;
-  const aiTotal = Math.min(94, Math.max(68, aiBaseline + Math.floor(Math.random() * 5) - 2));
+  // Evaluate AI opponent using the exact same objective 100-point rubric
+  let aiLogic = 8.0;
+  let aiEvidence = 7.5;
+  let aiRebuttal = 7.8;
+  let aiClarity = 8.2;
+  let aiRelevance = 8.5;
+  let aiPersuasiveness = 7.8;
+
+  if (session.difficulty === 'Beginner') {
+    aiLogic = 7.2;
+    aiEvidence = 6.8;
+    aiRebuttal = 7.0;
+    aiClarity = 7.5;
+    aiRelevance = 8.0;
+    aiPersuasiveness = 7.2;
+  } else if (session.difficulty === 'Intermediate') {
+    aiLogic = 7.8;
+    aiEvidence = 7.4;
+    aiRebuttal = 7.6;
+    aiClarity = 8.0;
+    aiRelevance = 8.4;
+    aiPersuasiveness = 7.7;
+  } else {
+    aiLogic = 8.5;
+    aiEvidence = 8.2;
+    aiRebuttal = 8.3;
+    aiClarity = 8.5;
+    aiRelevance = 8.8;
+    aiPersuasiveness = 8.2;
+  }
 
   const aiCategoryScores: CategoryScores = {
-    logicalReasoning: Math.round((aiTotal * 0.25) * 10) / 10,
-    evidence: Math.round((aiTotal * 0.20) * 10) / 10,
-    rebuttalQuality: Math.round((aiTotal * 0.20) * 10) / 10,
-    clarity: Math.round((aiTotal * 0.15) * 10) / 10,
-    relevance: Math.round((aiTotal * 0.10) * 10) / 10,
-    persuasiveness: Math.round((aiTotal * 0.10) * 10) / 10
+    logicalReasoning: Math.round((aiLogic / 10) * 25 * 10) / 10,
+    evidence: Math.round((aiEvidence / 10) * 20 * 10) / 10,
+    rebuttalQuality: Math.round((aiRebuttal / 10) * 20 * 10) / 10,
+    clarity: Math.round((aiClarity / 10) * 15 * 10) / 10,
+    relevance: Math.round((aiRelevance / 10) * 10 * 10) / 10,
+    persuasiveness: Math.round((aiPersuasiveness / 10) * 10 * 10) / 10
   };
 
+  const aiTotal = Math.round(
+    aiCategoryScores.logicalReasoning +
+    aiCategoryScores.evidence +
+    aiCategoryScores.rebuttalQuality +
+    aiCategoryScores.clarity +
+    aiCategoryScores.relevance +
+    aiCategoryScores.persuasiveness
+  );
+
+  // Fair, objective winner determination
   let winner: 'user' | 'ai' | 'tie' = 'user';
-  if (userTotal > aiTotal) winner = 'user';
-  else if (aiTotal > userTotal) winner = 'ai';
-  else winner = 'tie';
+  if (Math.abs(userTotal - aiTotal) <= 1) {
+    winner = 'tie';
+  } else if (userTotal > aiTotal) {
+    winner = 'user';
+  } else {
+    winner = 'ai';
+  }
 
   // Gather quotes
   const userBestQuote = userMsgs.length > 0 

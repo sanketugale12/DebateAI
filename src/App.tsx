@@ -9,6 +9,7 @@ import { HistoryView } from './components/HistoryView';
 import { ProfileView } from './components/ProfileView';
 import { TranscriptModal } from './components/TranscriptModal';
 import { AuthView } from './components/AuthView';
+import { ChatbotView } from './components/ChatbotView';
 
 import { 
   User, 
@@ -22,7 +23,10 @@ import {
   Difficulty, 
   TopicCategory,
   AppView,
-  AuthMode
+  AuthMode,
+  ChatConversation,
+  ChatMessage,
+  DebatePersona
 } from './types';
 
 import { INITIAL_USER, INITIAL_DASHBOARD_STATS, INITIAL_RESULTS } from './data/mockData';
@@ -83,9 +87,85 @@ function playChime(type: 'turn' | 'success' | 'alert') {
 }
 
 export default function App() {
-  // Navigation State (defaults to setup matching DC.png)
-  const [currentView, setCurrentView] = useState<AppView>('setup');
+  // Navigation State (defaults to 'chat' - ChatGPT-style debate chatbot!)
+  const [currentView, setCurrentView] = useState<AppView>('chat');
   const [authInitialMode, setAuthInitialMode] = useState<AuthMode>('login');
+
+  // Conversational Chatbot State (ChatGPT-style)
+  const [conversations, setConversations] = useState<ChatConversation[]>(() => {
+    const saved = localStorage.getItem('debateai_chat_conversations');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) { /* fallback */ }
+    }
+    return [{
+      id: `chat-${Date.now()}`,
+      title: 'Open Debate & Out-of-the-Box Inquiries',
+      topic: 'Open Debate & Inquiries',
+      userPosition: 'PRO',
+      persona: 'adversary',
+      messages: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }];
+  });
+
+  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
+    return conversations[0]?.id || `chat-${Date.now()}`;
+  });
+
+  const handleNewConversation = (initialTopic?: string, persona?: DebatePersona) => {
+    const newConv: ChatConversation = {
+      id: `chat-${Date.now()}`,
+      title: initialTopic ? (initialTopic.slice(0, 32) + '...') : 'New Debate',
+      topic: initialTopic || 'Open Debate',
+      userPosition: 'PRO',
+      persona: persona || 'adversary',
+      messages: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    setConversations(prev => [newConv, ...prev]);
+    setActiveConversationId(newConv.id);
+    setCurrentView('chat');
+  };
+
+  const handleUpdateConversation = (updated: ChatConversation) => {
+    setConversations(prev => prev.map(c => c.id === updated.id ? updated : c));
+  };
+
+  const handleDeleteConversation = (id: string) => {
+    setConversations(prev => {
+      const remaining = prev.filter(c => c.id !== id);
+      if (remaining.length === 0) {
+        const fresh: ChatConversation = {
+          id: `chat-${Date.now()}`,
+          title: 'New Debate',
+          topic: 'Open Debate',
+          userPosition: 'PRO',
+          persona: 'adversary',
+          messages: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        setActiveConversationId(fresh.id);
+        return [fresh];
+      }
+      if (activeConversationId === id) {
+        setActiveConversationId(remaining[0].id);
+      }
+      return remaining;
+    });
+  };
+
+  const handleAdjudicateFromChat = (result: DebateResult) => {
+    setCurrentResult(result);
+    setPastResults(prev => [result, ...prev]);
+    setCurrentView('results');
+    triggerAudio('success');
+  };
 
   // User State (persisted locally)
   const [user, setUser] = useState<User>(() => {
@@ -107,7 +187,7 @@ export default function App() {
 
   const handleLoginSuccess = (authenticatedUser: User) => {
     setUser(authenticatedUser);
-    setCurrentView('setup');
+    setCurrentView('chat');
     triggerAudio('success');
   };
 
@@ -150,6 +230,7 @@ export default function App() {
   const [latestFallacies, setLatestFallacies] = useState<FallacyDetection[]>([]);
   const [isLoadingAI, setIsLoadingAI] = useState<boolean>(false);
   const [loadingStepText, setLoadingStepText] = useState<string>('');
+  const [isFinalRoundReadyForJudge, setIsFinalRoundReadyForJudge] = useState<boolean>(false);
 
   // Selected Result for Results Page or Modal
   const [currentResult, setCurrentResult] = useState<DebateResult | null>(null);
@@ -167,6 +248,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('debateai_past_results', JSON.stringify(pastResults));
   }, [pastResults]);
+
+  useEffect(() => {
+    localStorage.setItem('debateai_chat_conversations', JSON.stringify(conversations));
+  }, [conversations]);
 
   // Audio helper respecting user settings
   const triggerAudio = (type: 'turn' | 'success' | 'alert') => {
@@ -205,6 +290,7 @@ export default function App() {
     setMessages([]);
     setLatestAnalysis(undefined);
     setLatestFallacies([]);
+    setIsFinalRoundReadyForJudge(false);
     setCurrentView('debate');
     triggerAudio('turn');
   };
@@ -269,11 +355,18 @@ export default function App() {
       setMessages(finalMessages);
       triggerAudio('turn');
 
-      // 4. Progress Round or Conclude
+      // 4. Progress Round or Enable Final Review
       if (currentRound >= currentSession.rounds) {
-        // Automatically conclude if final round has ended
-        setLoadingStepText('Final round concluded. Convening AI Judicial Council...');
-        await executeDebateAdjudication(finalMessages);
+        // Final round has been answered by the AI opponent.
+        // Fair debate mandate: DO NOT auto-redirect to results immediately.
+        // Keep the user in the live arena so they can read, review, and listen to the AI's final response for as long as they want.
+        setIsFinalRoundReadyForJudge(true);
+        setCurrentSession(prev => prev ? {
+          ...prev,
+          status: 'completed',
+          updatedAt: new Date().toISOString()
+        } : null);
+        triggerAudio('success');
       } else {
         const nextRound = currentRound + 1;
         const nextPhase = DEBATE_PHASES.find(p => p.round === nextRound)?.name || 'Rebuttal & Extension';
@@ -470,18 +563,41 @@ export default function App() {
           onNavigate={setCurrentView}
           user={user}
           onOpenAuth={handleOpenAuth}
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelectConversation={setActiveConversationId}
+          onNewConversation={handleNewConversation}
+          onDeleteConversation={handleDeleteConversation}
         />
 
         {/* Main Content Viewport */}
-        <main className="flex-1 overflow-y-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex flex-col items-center justify-start min-h-[calc(100vh-64px)]">
+        <main className={`flex-1 overflow-y-auto flex flex-col items-center justify-start min-h-[calc(100vh-64px)] ${
+          currentView === 'chat' ? 'p-0 overflow-hidden' : 'px-3 sm:px-6 lg:px-8 py-4 sm:py-6'
+        }`}>
           
+          {/* Chatbot View (ChatGPT-style) */}
+          {currentView === 'chat' && (
+            <div className="w-full h-full flex-1 flex flex-col">
+              <ChatbotView
+                user={user}
+                conversations={conversations}
+                activeConversationId={activeConversationId}
+                onSelectConversation={setActiveConversationId}
+                onNewConversation={handleNewConversation}
+                onUpdateConversation={handleUpdateConversation}
+                onAdjudicateToResults={handleAdjudicateFromChat}
+                onNavigateToArena={() => setCurrentView('setup')}
+              />
+            </div>
+          )}
+
           {/* Authentication View (Login / Sign In, Sign Up / Register, Forgot Password) */}
           {currentView === 'auth' && (
             <div className="w-full max-w-4xl flex items-center justify-center">
               <AuthView
                 initialMode={authInitialMode}
                 onLoginSuccess={handleLoginSuccess}
-                onCancel={() => setCurrentView('setup')}
+                onCancel={() => setCurrentView('chat')}
               />
             </div>
           )}
@@ -523,6 +639,7 @@ export default function App() {
                 loadingStepText={loadingStepText}
                 onSendArgument={handleSendArgument}
                 onConcludeDebate={handleManualConcludeDebate}
+                isFinalRoundReadyForJudge={isFinalRoundReadyForJudge}
               />
             </div>
           )}

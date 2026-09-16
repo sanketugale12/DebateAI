@@ -41,10 +41,10 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Left: Logo & Platform Identity */}
         <div 
           id="nav-brand"
-          onClick={() => onNavigate('setup')}
+          onClick={() => onNavigate('chat')}
           className="flex items-center gap-3 cursor-pointer select-none group"
         >
-          {/* Logo icon matching screenshot: vibrant purple/magenta square with chat glyph */}
+          {/* Logo icon: vibrant purple/magenta square with chat glyph */}
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#9333ea] via-[#7c3aed] to-[#ec4899] flex items-center justify-center shadow-lg shadow-purple-900/30 group-hover:scale-105 transition-transform shrink-0">
             <div className="w-5 h-5 rounded-md border-2 border-white flex items-center justify-center">
               <div className="w-2 h-2 bg-white rounded-xs"></div>
@@ -56,28 +56,43 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="font-bold text-lg tracking-tight text-white">DebateAI</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-[#161f42] border border-[#27376c] text-[#60a5fa] flex items-center gap-1">
                 <Shield className="w-3 h-3 text-[#60a5fa]" />
-                <span>MULTI-AGENT</span>
+                <span>CHATBOT</span>
               </span>
             </div>
             <p className="text-[11px] text-slate-400 font-normal hidden sm:block">
-              Intelligent AI Debate Practice Platform
+              Conversational AI Debate Assistant & Sparring Partner
             </p>
           </div>
         </div>
 
         {/* Center: Pill Navigation Dock */}
         <div className="hidden md:flex items-center bg-[#0c1022] border border-slate-800 rounded-xl p-1 gap-1 shadow-inner">
+          {/* Chatbot Tab (ChatGPT-style) */}
+          <button
+            id="nav-tab-chatbot"
+            onClick={() => onNavigate('chat')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              currentView === 'chat'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chatbot</span>
+          </button>
+
+          {/* Parliamentary Arena Tab */}
           <button
             id="nav-tab-setup"
             onClick={() => onNavigate('setup')}
             className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentView === 'setup'
+              currentView === 'setup' || currentView === 'debate'
                 ? 'bg-[#4f46e5] text-white shadow-md shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
             }`}
           >
-            <PlusCircle className="w-3.5 h-3.5" />
-            <span>New Debate</span>
+            <Swords className="w-3.5 h-3.5" />
+            <span>Formal Arena</span>
           </button>
 
           <button
@@ -118,21 +133,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <UserIcon className="w-3.5 h-3.5" />
             <span>Profile</span>
           </button>
-
-          {hasActiveDebate && (
-            <button
-              id="nav-tab-active-arena"
-              onClick={() => onNavigate('debate')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                currentView === 'debate'
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-semibold'
-                  : 'text-amber-400 hover:bg-amber-500/10'
-              }`}
-            >
-              <Swords className="w-3.5 h-3.5 animate-pulse" />
-              <span>Live Arena</span>
-            </button>
-          )}
         </div>
 
         {/* Right: Theme Toggle + Sign In / User Chip + Logout */}

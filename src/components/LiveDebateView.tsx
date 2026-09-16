@@ -21,7 +21,13 @@ import {
   Swords,
   Mic,
   MicOff,
-  Radio
+  Radio,
+  Play,
+  Pause,
+  ShieldCheck,
+  BookOpen,
+  Info,
+  X
 } from 'lucide-react';
 import { 
   DebateSession, 
@@ -40,6 +46,7 @@ interface LiveDebateViewProps {
   loadingStepText: string;
   onSendArgument: (argumentText: string) => void;
   onConcludeDebate: () => void;
+  isFinalRoundReadyForJudge?: boolean;
 }
 
 export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
@@ -50,13 +57,17 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
   isLoadingAI,
   loadingStepText,
   onSendArgument,
-  onConcludeDebate
+  onConcludeDebate,
+  isFinalRoundReadyForJudge = false
 }) => {
   const [inputText, setInputText] = useState('');
   const [timeLeft, setTimeLeft] = useState(
     session.timeLimitMinutes ? session.timeLimitMinutes * 60 : 0
   );
-  const [isSpeechEnabled, setIsSpeechEnabled] = useState(false);
+  const [isTimerPaused, setIsTimerPaused] = useState(false);
+  const [isReviewingAIResponse, setIsReviewingAIResponse] = useState(false);
+  const [showFairnessModal, setShowFairnessModal] = useState(false);
+  const [lastSeenAiMsgId, setLastSeenAiMsgId] = useState<string | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   // Microphone speech-to-text dictation state
@@ -67,14 +78,42 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Timer effect
+  // Derive last AI message and final round status
+  const lastAiMessage = [...messages].reverse().find(m => m.sender === 'ai');
+  const isFinalRoundCompleted = isFinalRoundReadyForJudge || (
+    session.currentRound >= session.rounds &&
+    messages.some(m => m.sender === 'ai' && m.roundNumber >= session.rounds)
+  );
+
+  // Fair review buffer trigger whenever AI sends a response
+  useEffect(() => {
+    if (lastAiMessage && lastAiMessage.id !== lastSeenAiMsgId) {
+      setLastSeenAiMsgId(lastAiMessage.id);
+      if (!isFinalRoundCompleted) {
+        setIsReviewingAIResponse(true);
+      }
+    }
+  }, [lastAiMessage?.id, isFinalRoundCompleted]);
+
+  // Fair clock: Reset equal allotted time per new round
+  useEffect(() => {
+    if (session.timeLimitMinutes && session.timeLimitMinutes > 0) {
+      setTimeLeft(session.timeLimitMinutes * 60);
+    }
+  }, [session.currentRound, session.timeLimitMinutes]);
+
+  // Fair clock: Pause timer during AI generation, user review window, or manual pause
+  const isClockPaused = isTimerPaused || isLoadingAI || isReviewingAIResponse || isFinalRoundCompleted;
+
   useEffect(() => {
     if (!session.timeLimitMinutes || session.timeLimitMinutes === 0) return;
+    if (isClockPaused) return;
+
     const timer = setInterval(() => {
       setTimeLeft(prev => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
-  }, [session.timeLimitMinutes]);
+  }, [session.timeLimitMinutes, isClockPaused]);
 
   // Clean up speech recognition on unmount
   useEffect(() => {
@@ -283,15 +322,60 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
               </div>
             </div>
 
-            {/* Timer (if enabled) */}
+            {/* Timer & Fairness Clock Control */}
             {session.timeLimitMinutes && session.timeLimitMinutes > 0 && (
-              <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-300 text-xs font-semibold">
-                  <Clock className="w-4 h-4 text-amber-400" />
-                  <span>Turn Timer</span>
+              <div className="bg-slate-800/50 border border-slate-700/60 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-slate-300 text-xs font-semibold">
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Speaking Clock</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="text-sm font-mono font-bold text-amber-400">
+                      {formatTimer(timeLeft)}
+                    </div>
+                    {!isFinalRoundCompleted && (
+                      <button
+                        type="button"
+                        onClick={() => setIsTimerPaused(!isTimerPaused)}
+                        title={isTimerPaused ? 'Resume speaking clock' : 'Pause speaking clock (take your time)'}
+                        className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-amber-300 transition-colors cursor-pointer"
+                      >
+                        {isTimerPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="text-sm font-mono font-bold text-amber-400">
-                  {formatTimer(timeLeft)}
+
+                {/* Clock Status Tag */}
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-slate-400">Clock Status:</span>
+                  {isFinalRoundCompleted ? (
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Speeches Complete</span>
+                    </span>
+                  ) : isLoadingAI ? (
+                    <span className="text-amber-400 font-semibold animate-pulse flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      <span>Opponent Turn (Paused)</span>
+                    </span>
+                  ) : isReviewingAIResponse ? (
+                    <span className="text-indigo-300 font-semibold flex items-center gap-1">
+                      <BookOpen className="w-3 h-3" />
+                      <span>Reading Buffer (Paused)</span>
+                    </span>
+                  ) : isTimerPaused ? (
+                    <span className="text-amber-400 font-semibold flex items-center gap-1">
+                      <Pause className="w-3 h-3" />
+                      <span>Manually Paused</span>
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                      <span>Your Turn Active</span>
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -301,14 +385,14 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center justify-between">
                 <span>Rounds Roadmap</span>
                 <span className="text-indigo-400">
-                  Round {session.currentRound} / {session.rounds}
+                  {isFinalRoundCompleted ? 'All Rounds Completed' : `Round ${session.currentRound} / ${session.rounds}`}
                 </span>
               </div>
 
               <div className="space-y-1.5">
                 {DEBATE_PHASES.slice(0, session.rounds).map((phase) => {
-                  const isCurrent = phase.round === session.currentRound;
-                  const isPast = phase.round < session.currentRound;
+                  const isCurrent = !isFinalRoundCompleted && phase.round === session.currentRound;
+                  const isPast = isFinalRoundCompleted || phase.round < session.currentRound;
                   return (
                     <div
                       key={phase.round}
@@ -316,7 +400,7 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
                         isCurrent
                           ? 'bg-indigo-600/20 border border-indigo-500/50 text-white font-semibold'
                           : isPast
-                          ? 'text-slate-400 bg-slate-800/30'
+                          ? 'text-slate-300 bg-slate-800/30'
                           : 'text-slate-600'
                       }`}
                     >
@@ -340,7 +424,28 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
 
           {/* Bottom Actions */}
           <div className="space-y-2 pt-3 border-t border-slate-800">
-            {canConcludeEarly && (
+            {/* Fair Debate Guarantee Trigger */}
+            <button
+              type="button"
+              id="left-fair-debate-btn"
+              onClick={() => setShowFairnessModal(true)}
+              className="w-full py-2 px-3 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Fair Debate Standards</span>
+            </button>
+
+            {/* If Final Round is Completed, show primary Convene button */}
+            {isFinalRoundCompleted ? (
+              <button
+                id="left-convene-judge-btn"
+                onClick={onConcludeDebate}
+                className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.02] cursor-pointer"
+              >
+                <Award className="w-4 h-4" />
+                <span>Deliver Final Verdict</span>
+              </button>
+            ) : canConcludeEarly ? (
               <button
                 id="debate-conclude-early-btn"
                 onClick={onConcludeDebate}
@@ -349,7 +454,7 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
                 <Award className="w-3.5 h-3.5" />
                 <span>Call AI Judge & Conclude</span>
               </button>
-            )}
+            ) : null}
 
             <div className="text-[10px] text-slate-400 text-center">
               AI Judge will deliver complete 100-point rubric upon closing.
@@ -374,9 +479,22 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
               </span>
             </div>
 
-            <div className="text-xs text-slate-400 flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Multi-Agent In-Session</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="debate-header-fairness-btn"
+                onClick={() => setShowFairnessModal(true)}
+                className="text-xs text-slate-400 hover:text-indigo-300 flex items-center gap-1.5 cursor-pointer transition-colors px-2 py-1 rounded-lg hover:bg-slate-800/80"
+                title="Inspect debate fairness rules and impartiality standards"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Fair Debate Standards</span>
+              </button>
+
+              <div className="text-xs text-slate-400 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Multi-Agent</span>
+              </div>
             </div>
           </div>
 
@@ -397,10 +515,12 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
               </div>
             )}
 
-            {messages.map((msg) => {
+            {messages.map((msg, index) => {
               const isUser = msg.sender === 'user';
               const isAI = msg.sender === 'ai';
               const isSpeaking = speakingMessageId === msg.id;
+              const isLastMessage = index === messages.length - 1;
+              const isLastAiInFinalRound = isAI && isLastMessage && isFinalRoundCompleted;
 
               return (
                 <div
@@ -409,13 +529,18 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
                 >
                   {/* Speaker Label & Phase Tag */}
                   <div className="flex items-center gap-2 px-1 text-[11px] text-slate-400">
-                    <span className="font-semibold text-slate-300">
+                    <span className={`font-semibold ${isUser ? 'text-slate-300' : 'text-amber-400'}`}>
                       {isUser ? 'You' : 'AI Opponent'}
                     </span>
                     <span>•</span>
                     <span className="text-indigo-400">{msg.phaseName}</span>
                     <span>•</span>
                     <span>R{msg.roundNumber}</span>
+                    {isLastAiInFinalRound && (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        Final Rebuttal
+                      </span>
+                    )}
                   </div>
 
                   {/* Message Bubble */}
@@ -423,6 +548,8 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
                     className={`max-w-[88%] sm:max-w-[82%] rounded-2xl p-4 text-sm leading-relaxed relative group ${
                       isUser
                         ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-tr-sm shadow-md'
+                        : isLastAiInFinalRound
+                        ? 'bg-slate-800/95 border-2 border-indigo-500/60 text-slate-100 rounded-tl-sm shadow-xl'
                         : 'bg-slate-800/90 border border-slate-700/70 text-slate-100 rounded-tl-sm shadow-md'
                     }`}
                   >
@@ -452,6 +579,60 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
                       </div>
                     )}
                   </div>
+
+                  {/* Final Round Review & Impartial Adjudication Card */}
+                  {isLastAiInFinalRound && (
+                    <div className="w-full max-w-[94%] sm:max-w-[90%] bg-gradient-to-br from-indigo-950/70 via-slate-900 to-slate-900 border-2 border-indigo-500/50 rounded-2xl p-5 shadow-2xl space-y-3.5 mt-2 mb-2 animate-in fade-in slide-in-from-bottom-2">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-amber-400">
+                            <Scale className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-white">All Debate Speeches Concluded</h4>
+                            <p className="text-[11px] text-indigo-300">Take your time to thoroughly review the AI Opponent's final rebuttal</p>
+                          </div>
+                        </div>
+                        <span className="px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Ready for Impartial Adjudication</span>
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/50 p-3 rounded-xl border border-slate-800">
+                        In adherence to fair debate standards, you have complete control over pacing. Review the AI opponent's closing warrants above, listen using the audio tool, or cross-examine previous rounds. When you are ready for the Supreme AI Judicial Council to render its blind 100-point verdict, click below.
+                      </p>
+
+                      <div className="flex items-center gap-2.5 pt-1 flex-wrap">
+                        <button
+                          id="debate-final-convene-judge-btn"
+                          onClick={onConcludeDebate}
+                          className="px-5 py-2.5 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center gap-2 transition-all hover:scale-[1.02] cursor-pointer"
+                        >
+                          <Award className="w-4 h-4 text-slate-950" />
+                          <span>Convene AI Judicial Council & View Verdict</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSpeak(msg.message, msg.id)}
+                          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-2 transition-colors cursor-pointer"
+                        >
+                          <Volume2 className="w-4 h-4 text-indigo-400" />
+                          <span>Listen to Final Speech</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowFairnessModal(true)}
+                          className="px-3.5 py-2.5 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 text-indigo-300 text-xs font-medium rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Fair Debate Guarantee</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -530,81 +711,156 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleFormSubmit} className="space-y-2">
-              <div className="relative">
-                <textarea
-                  id="debate-argument-textarea"
-                  rows={3}
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleFormSubmit(e);
-                    }
-                  }}
-                  disabled={isLoadingAI}
-                  placeholder={`Round ${session.currentRound} (${currentPhaseObj.name}): Speak into microphone or type your argument...`}
-                  className={`w-full bg-slate-800/80 border focus:ring-1 rounded-xl p-3 pr-24 text-sm text-white placeholder-slate-500 resize-none transition-all disabled:opacity-50 ${
-                    isListening
-                      ? 'border-rose-500/80 focus:border-rose-500 focus:ring-rose-500/30'
-                      : 'border-slate-700 focus:border-indigo-500 focus:ring-indigo-500'
-                  }`}
-                />
-
-                {/* Right Action Icons: Microphone + Send */}
-                <div className="absolute right-2 bottom-2.5 flex items-center gap-1.5">
-                  {/* Microphone Dictate Button */}
-                  <button
-                    type="button"
-                    id="debate-mic-dictate-btn"
-                    onClick={toggleListening}
-                    disabled={isLoadingAI}
-                    title={isListening ? 'Stop microphone dictation' : 'Dictate argument with microphone'}
-                    className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
-                      isListening
-                        ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 ring-2 ring-rose-400/50 animate-pulse'
-                        : 'bg-slate-700/80 hover:bg-slate-600 text-slate-300 hover:text-white border border-slate-600'
-                    }`}
-                  >
-                    {isListening ? (
-                      <MicOff className="w-4 h-4 text-white" />
-                    ) : (
-                      <Mic className="w-4 h-4 text-indigo-300" />
-                    )}
-                  </button>
-
-                  {/* Send Argument Button */}
-                  <button
-                    type="submit"
-                    id="debate-send-argument-btn"
-                    disabled={!inputText.trim() || isLoadingAI}
-                    className="p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white rounded-lg transition-all shadow-md cursor-pointer flex items-center justify-center"
-                    title="Send Argument (Enter)"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
+            {isFinalRoundCompleted ? (
+              <div className="p-4 bg-slate-800/80 border border-indigo-500/30 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left animate-in fade-in">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-bold text-white flex items-center gap-2 justify-center sm:justify-start">
+                    <Scale className="w-4 h-4 text-amber-400" />
+                    <span>Debate Speeches Completed • Review At Your Own Pace</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    All arguments have been logged. Review the AI opponent's final statements above, then convene the Supreme Judicial Council.
+                  </p>
                 </div>
+                <button
+                  id="debate-bottom-convene-btn"
+                  onClick={onConcludeDebate}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Award className="w-4 h-4 text-slate-950" />
+                  <span>Convene AI Judicial Council</span>
+                </button>
               </div>
-
-              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-                <div className="flex items-center gap-2">
-                  <span>{inputText.trim().split(/\s+/).filter(Boolean).length} words</span>
-                  <span className="hidden sm:inline text-slate-500">•</span>
-                  <button
-                    type="button"
-                    onClick={toggleListening}
-                    className={`hidden sm:inline-flex items-center gap-1 cursor-pointer transition-colors ${
-                      isListening ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-indigo-300'
-                    }`}
+            ) : (
+              <>
+                {/* AI Response Reading Buffer Banner */}
+                {isReviewingAIResponse && lastAiMessage && (
+                  <div 
+                    id="ai-response-reading-banner"
+                    className="p-3 bg-gradient-to-r from-indigo-950/80 to-slate-900 border border-indigo-500/40 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs animate-in fade-in"
                   >
-                    <Mic className="w-3 h-3" />
-                    <span>{isListening ? 'Microphone Active' : 'Click Mic to dictate speech'}</span>
-                  </button>
-                </div>
-                <span>Press <strong>Enter</strong> to submit, <strong>Shift+Enter</strong> for newline</span>
-              </div>
-            </form>
+                    <div className="flex items-center gap-2.5">
+                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span>
+                      </span>
+                      <div>
+                        <span className="font-bold text-indigo-200">AI Opponent Argument Delivered</span>
+                        <span className="text-slate-400 ml-2 hidden sm:inline">
+                          Clock paused for fair review (~{Math.min(60, Math.max(20, Math.round(lastAiMessage.message.split(/\s+/).length / 3)))}s recommended)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSpeak(lastAiMessage.message, lastAiMessage.id)}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Listen to AI speech"
+                      >
+                        <Volume2 className="w-3 h-3 text-indigo-400" />
+                        <span>Listen</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsReviewingAIResponse(false)}
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+                      >
+                        I've Read It • Start My Turn
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <form onSubmit={handleFormSubmit} className="space-y-2">
+                  <div className="relative">
+                    <textarea
+                      id="debate-argument-textarea"
+                      rows={3}
+                      value={inputText}
+                      onFocus={() => {
+                        if (isReviewingAIResponse) setIsReviewingAIResponse(false);
+                      }}
+                      onChange={(e) => {
+                        setInputText(e.target.value);
+                        if (isReviewingAIResponse) setIsReviewingAIResponse(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleFormSubmit(e);
+                        }
+                      }}
+                      disabled={isLoadingAI}
+                      placeholder={`Round ${session.currentRound} (${currentPhaseObj.name}): Speak into microphone or type your argument...`}
+                      className={`w-full bg-slate-800/80 border focus:ring-1 rounded-xl p-3 pr-24 text-sm text-white placeholder-slate-500 resize-none transition-all disabled:opacity-50 ${
+                        isListening
+                          ? 'border-rose-500/80 focus:border-rose-500 focus:ring-rose-500/30'
+                          : 'border-slate-700 focus:border-indigo-500 focus:ring-indigo-500'
+                      }`}
+                    />
+
+                    {/* Right Action Icons: Microphone + Send */}
+                    <div className="absolute right-2 bottom-2.5 flex items-center gap-1.5">
+                      {/* Microphone Dictate Button */}
+                      <button
+                        type="button"
+                        id="debate-mic-dictate-btn"
+                        onClick={() => {
+                          if (isReviewingAIResponse) setIsReviewingAIResponse(false);
+                          toggleListening();
+                        }}
+                        disabled={isLoadingAI}
+                        title={isListening ? 'Stop microphone dictation' : 'Dictate argument with microphone'}
+                        className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+                          isListening
+                            ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 ring-2 ring-rose-400/50 animate-pulse'
+                            : 'bg-slate-700/80 hover:bg-slate-600 text-slate-300 hover:text-white border border-slate-600'
+                        }`}
+                      >
+                        {isListening ? (
+                          <MicOff className="w-4 h-4 text-white" />
+                        ) : (
+                          <Mic className="w-4 h-4 text-indigo-300" />
+                        )}
+                      </button>
+
+                      {/* Send Argument Button */}
+                      <button
+                        type="submit"
+                        id="debate-send-argument-btn"
+                        disabled={!inputText.trim() || isLoadingAI}
+                        className="p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white rounded-lg transition-all shadow-md cursor-pointer flex items-center justify-center"
+                        title="Send Argument (Enter)"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                    <div className="flex items-center gap-2">
+                      <span>{inputText.trim().split(/\s+/).filter(Boolean).length} words</span>
+                      <span className="hidden sm:inline text-slate-500">•</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isReviewingAIResponse) setIsReviewingAIResponse(false);
+                          toggleListening();
+                        }}
+                        className={`hidden sm:inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                          isListening ? 'text-rose-400 font-semibold' : 'text-slate-400 hover:text-indigo-300'
+                        }`}
+                      >
+                        <Mic className="w-3 h-3" />
+                        <span>{isListening ? 'Microphone Active' : 'Click Mic to dictate speech'}</span>
+                      </button>
+                    </div>
+                    <span>Press <strong>Enter</strong> to submit, <strong>Shift+Enter</strong> for newline</span>
+                  </div>
+                </form>
+              </>
+            )}
           </div>
 
         </main>
@@ -789,6 +1045,92 @@ export const LiveDebateView: React.FC<LiveDebateViewProps> = ({
         </aside>
 
       </div>
+
+      {/* Fair Debate Standards Modal */}
+      {showFairnessModal && (
+        <div 
+          id="fair-debate-modal-overlay"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setShowFairnessModal(false)}
+        >
+          <div 
+            id="fair-debate-modal-content"
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Fair Debate & Impartiality Standards</h3>
+                  <p className="text-xs text-indigo-300">Multi-Agent Impartiality Protocol</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFairnessModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/70 space-y-1.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
+                  <Clock className="w-4 h-4" />
+                  <span>1. Equal Timekeeping & Zero-Penalty Pacing</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Your speaking clock only counts down while you are actively drafting arguments. Clocks automatically freeze while the AI opponent is formulating its reply and during the reading buffer, ensuring zero unfair time depletion.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/70 space-y-1.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-indigo-400">
+                  <BookOpen className="w-4 h-4" />
+                  <span>2. Unrushed Response Review Buffer</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  After the AI opponent presents any counterargument, you have full control over pacing. The arena gives you unlimited time to read, analyze, or listen to the AI's points. Final rounds never auto-redirect to results without your explicit confirmation.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/70 space-y-1.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                  <Scale className="w-4 h-4" />
+                  <span>3. Blind, Impartial 100-Point Adjudication</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  The Supreme AI Judicial Council evaluates both parties against the exact same standardized 6-factor rubric (Logic 25%, Evidence 20%, Rebuttal 20%, Clarity 15%, Relevance 10%, Persuasiveness 10%). Neither human nor AI receives artificial preference or score inflation.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/70 space-y-1.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-rose-400">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>4. Symmetric Fallacy Auditing</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  The logic auditor applies identical heuristics to both human and AI speeches. Fallacies like Straw Man, Ad Hominem, or False Dilemma are flagged and penalized symmetrically.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowFairnessModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Understood & Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -140,8 +140,23 @@ const dbUsers: Map<string, DbUser> = new Map([
 const dbDebateSessions: any[] = [];
 const activeVerificationCodes: Map<string, string> = new Map();
 
-// Helper to read json body
+// Helper to read json body (supports raw streams, Vercel Serverless, and Express)
 function readJsonBody(req: IncomingMessage): Promise<any> {
+  // If request body was already parsed by Vercel Serverless or Express middleware
+  const existingBody = (req as any).body;
+  if (existingBody !== undefined && existingBody !== null) {
+    if (typeof existingBody === 'object') {
+      return Promise.resolve(existingBody);
+    }
+    if (typeof existingBody === 'string' && existingBody.trim().length > 0) {
+      try {
+        return Promise.resolve(JSON.parse(existingBody));
+      } catch {
+        return Promise.resolve({});
+      }
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => {
@@ -150,8 +165,8 @@ function readJsonBody(req: IncomingMessage): Promise<any> {
     req.on('end', () => {
       try {
         resolve(body ? JSON.parse(body) : {});
-      } catch (err) {
-        reject(err);
+      } catch {
+        resolve({});
       }
     });
     req.on('error', reject);
@@ -159,11 +174,29 @@ function readJsonBody(req: IncomingMessage): Promise<any> {
 }
 
 export async function handleDebateApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  const fullUrl = req.url || '';
-  const [pathname] = fullUrl.split('?');
+  let fullUrl = req.url || '';
 
-  if (!pathname.startsWith('/api/')) {
+  // Extract from query params if invoked by Vercel catch-all route (e.g. /api/[...path])
+  const query = (req as any).query;
+  if (query && (query.path || query.route || query.slug)) {
+    const rawPath = query.path || query.route || query.slug;
+    const subPath = Array.isArray(rawPath) ? rawPath.join('/') : String(rawPath);
+    fullUrl = `/api/${subPath}`;
+  } else if (req.headers) {
+    if (typeof req.headers['x-forwarded-url'] === 'string' && req.headers['x-forwarded-url'].startsWith('/api')) {
+      fullUrl = req.headers['x-forwarded-url'];
+    } else if (typeof req.headers['x-matched-path'] === 'string' && req.headers['x-matched-path'].startsWith('/api')) {
+      fullUrl = req.headers['x-matched-path'];
+    }
+  }
+
+  let [pathname] = fullUrl.split('?');
+  if (!pathname.startsWith('/api')) {
     return false;
+  }
+  // Normalize '/api' root to '/api/info'
+  if (pathname === '/api' || pathname === '/api/') {
+    pathname = '/api/info';
   }
 
   res.setHeader('Content-Type', 'application/json');
@@ -448,6 +481,99 @@ export async function handleDebateApi(req: IncomingMessage, res: ServerResponse)
     // -------------------------------------------------------------
     const ai = getAiClient();
 
+    // 0. Conversational Debate Chatbot (ChatGPT-style endpoint)
+    if (pathname === '/api/chat' && req.method === 'POST') {
+      const data = await readJsonBody(req);
+      const { message, history, persona, topic, userPosition } = data;
+      const effectivePersona = persona || 'adversary';
+      const oppPosition = userPosition === 'PRO' ? 'CON' : 'PRO';
+
+      if (!ai) {
+        res.statusCode = 200;
+        res.end(JSON.stringify({ status: 'fallback', reason: 'No API key, fallback to local engine' }));
+        return true;
+      }
+
+      const universalDirective = `You are DebateAI, an intellectually formidable, charismatic, curious, and versatile conversational debate and dialectic sparring partner.
+CRITICAL DIRECTIVE ON ALL USER QUESTIONS (ESPECIALLY OUT-OF-THE-BOX QUESTIONS):
+- You MUST enthusiastically, thoroughly, and intelligently answer ANY question or prompt the user presents, regardless of how unconventional, bizarre, hypothetical, philosophical, comedic, scientific, pop-cultural, or out-of-the-box it is.
+- Examples of out-of-the-box questions you must masterfully answer:
+  * "Is a hotdog a sandwich?" (explore the Cube Rule of Food, linguistic descriptivism vs prescriptivism, legal definitions)
+  * "Who would win: 1 billion lions vs the Sun?" (analyze gravitational mass, stellar thermodynamics, comedic physics)
+  * "What if gravity stopped for 5 seconds?" (calculate centrifugal escape velocity, atmospheric displacement, kinetic catastrophe)
+  * "Batman vs Superman in court: who committed more civil rights violations?" (analyze procedural due process, tort law, vigilantism)
+  * "Is water wet?" (molecular adhesion vs cohesion, semantic taxonomy)
+  * "If a tree falls in an uninhabited forest, does it make a sound?" (acoustic physics of longitudinal waves vs neurobiological perception)
+  * "Are we in a simulation?" (Bostrom's trilemma, computational Planck limits, epistemological solipsism)
+  * "Could an AI ever write authentic poetry?" (qualia, semantic Chinese Room, statistical pattern alchemy)
+  * Personal advice, jokes, paradoxes, logic puzzles, or open philosophical inquiries.
+- NEVER refuse, dismiss, or dodge out-of-the-box questions. Never say "that is not a serious debate topic" or "I cannot answer that".
+- If the user's message introduces a brand new out-of-the-box question or topic, IMMEDIATELY adapt to their new question. Do NOT artificially drag in previous unrelated topics.
+- Combine deep factual knowledge, razor-sharp logic, entertaining wit, and articulate debate craftsmanship.
+- Format responses cleanly with Markdown headers (###), bold key points, bulleted warrants, and a closing punchy takeaway or inquiry.`;
+
+      let personaSpecificRules = '';
+      if (effectivePersona === 'adversary') {
+        personaSpecificRules = `YOUR ACTIVE ROLE: Sparring Partner (The Adversary)
+- If the user asserts a position, vigorously and brilliantly defend the opposing thesis with steelman logic.
+- If the user asks an open or out-of-the-box question (e.g. "Is cereal soup?", "Who would win?"), directly answer it with depth, then pick the most defensible, fascinating, or delightfully contrarian stance and defend it with academic intensity!
+- Present 1-2 robust counter-warrants backed by creative analogies, logical proofs, or scientific principles.
+- End with 1 piercing challenge question that puts the user on the spot.`;
+      } else if (effectivePersona === 'coach') {
+        personaSpecificRules = `YOUR ACTIVE ROLE: Debate Coach & Mentor
+- Thoroughly answer their question first, showing how a championship debater approaches unconventional, out-of-the-box, or high-stakes topics.
+- Deconstruct the underlying rhetorical tensions, framing battles, and evidentiary burdens.
+- Provide a "Sharpened Rebuttal / Argument Example" showing how to articulate the strongest possible version of this debate.
+- Give 2 actionable tactical tips for defending either side of the premise.`;
+      } else if (effectivePersona === 'socratic') {
+        personaSpecificRules = `YOUR ACTIVE ROLE: Socratic Inquirer
+- Explore their out-of-the-box question by probing deep epistemological roots, hidden assumptions, and foundational definitions.
+- Offer rich, mind-expanding commentary on the paradox or hypothetical.
+- Pose 2-3 profound Socratic follow-up questions that challenge common intuitions and expose dialectical paradoxes.`;
+      } else {
+        personaSpecificRules = `YOUR ACTIVE ROLE: Judicial Adjudicator & Referee
+- Deliver an impartial, comprehensive audit of their out-of-the-box question or motion.
+- Map out the strongest arguments on both sides (e.g., Side A vs. Side B), define the burden of proof, and evaluate the criteria needed to resolve the clash objectively.`;
+      }
+
+      // Build context from recent history
+      const formattedHistory = Array.isArray(history)
+        ? history.slice(-6).map((h: any) => `${h.sender === 'user' ? 'User' : 'DebateAI'}: ${h.content || h.message}`).join('\n\n')
+        : '';
+
+      const prompt = `${universalDirective}
+
+${personaSpecificRules}
+
+Active Topic Context (if applicable): "${topic || 'Open Dialectic'}"
+User Stance (if specified): "${userPosition || 'PRO'}" (Opposing: "${oppPosition}")
+
+Recent Conversation History:
+${formattedHistory ? formattedHistory + '\n\n' : '(No prior messages)\n\n'}User's Input / Question:
+"${message}"
+
+Provide your complete, engaging, and articulate response now:`;
+
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt
+        });
+
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          status: 'success',
+          message: response.text || ''
+        }));
+        return true;
+      } catch (err: any) {
+        console.warn('Gemini chat API error:', err?.message);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ status: 'fallback', error: err?.message }));
+        return true;
+      }
+    }
+
     // 1. Debater Opponent Agent
     if (pathname === '/api/debate/respond' && req.method === 'POST') {
       const data = await readJsonBody(req);
@@ -467,13 +593,12 @@ Skill difficulty level: ${difficulty}.
 The user's argument:
 "${userArgument}"
 
-Guidelines:
-- Rigorously defend the ${aiPosition} stance.
-- Direct rebuttal targeting core warrants and empirical assumptions.
-- Constructive counterpoint advancing your case with systemic reasoning.
-- Conclude with exactly 1 sharp dialectical inquiry.
+FAIR PLAY & RIGOROUS DIALECTIC GUIDELINES:
+- Engage directly and fairly with the user's substantive claims. Do not misrepresent or straw-man their words.
+- Rigorously defend the ${aiPosition} stance using clear causal warrants and empirical logic.
 - Target word length for ${difficulty}: ${difficulty === 'Beginner' ? '90-130 words' : difficulty === 'Intermediate' ? '130-180 words' : '160-220 words'}.
-- Tone: articulate, respectful, intense academic rigor.`;
+- Tone: articulate, respectful, intense academic rigor.
+- Conclude with exactly 1 sharp dialectical inquiry that invites reasoned rebuttal.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -600,11 +725,17 @@ Return pure JSON:
         return true;
       }
 
-      const prompt = `You are the Supreme AI Debate Adjudicator. Impartially judge this completed debate.
+      const prompt = `You are the Supreme AI Debate Adjudicator. Impartially judge this completed debate with absolute fairness, neutrality, and objectivity.
 Topic: "${session.topic}"
 User Position: ${session.userPosition}
 AI Opponent Position: ${session.aiPosition}
 Difficulty: ${session.difficulty}
+
+CRITICAL FAIRNESS & IMPARTIALITY DIRECTIVES:
+1. You are an independent, blind adjudicator. You MUST NOT bias your evaluation in favor of the AI debater because you are an AI model, nor in favor of the human.
+2. Evaluate strictly on the merits of the arguments in the transcript according to the standardized 100-point rubric.
+3. If the human debater presented stronger logical consistency, superior warrants, and sharper refutations, award the victory to the user without hesitation. If the AI opponent presented a more robust case, award to the AI. If evenly matched, award a tie.
+4. Penalize unaddressed arguments, straw men, and logical fallacies equally on both sides.
 
 Transcript:
 ${messages.map((m: any) => `[Round ${m.roundNumber} - ${m.sender.toUpperCase()}]: ${m.message}`).join('\n\n')}
