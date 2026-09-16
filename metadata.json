@@ -1,0 +1,8 @@
+{
+  "name": "DebateAI – AI-Powered Debate Assistant Chatbot",
+  "description": "Interactive AI debate platform with separate agents for Debating, Argument Analysis, Fallacy Detection, and AI Judging to hone critical thinking and persuasive skills.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
